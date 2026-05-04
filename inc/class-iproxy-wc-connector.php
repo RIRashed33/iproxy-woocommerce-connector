@@ -44,6 +44,9 @@ final class IPROXY_WC_Connector {
         add_action( 'admin_menu', [ $this, 'register_admin_menu' ] );
         add_action( 'admin_init', [ $this, 'register_settings' ] );
         add_action( 'init', [ $this, 'register_connections_cpt' ] );
+        add_action('edit_form_after_title', [$this, 'iproxy_connection_under_title']);
+        add_action('save_post_product', [$this, 'iproxy_save_connection_under_title']);
+        add_action('init', [ $this, 'register_duration_attribute' ]);
     }
 
     public function register_admin_menu() {
@@ -173,5 +176,255 @@ final class IPROXY_WC_Connector {
             'publicly_queryable' => false,
         ] );
     }
+
+    // All Connection
+    public function sync_all_connections() {
+
+        $api_key = get_option('iproxy_api_key', '');
+
+        if ( empty($api_key) ) {
+            return;
+        }
+
+        $response = wp_remote_get(
+            'https://iproxy.online/api/console/v1/connections',
+            [
+                'headers' => [
+                    'Authorization' => 'Bearer ' . $api_key
+                ],
+                'timeout' => 20,
+            ]
+        );
+
+        if ( is_wp_error($response) ) {
+            return;
+        }
+
+        $status = wp_remote_retrieve_response_code($response);
+        $data   = json_decode(wp_remote_retrieve_body($response), true);
+
+        if ( $status !== 200 || empty($data['connections']) ) {
+            return;
+        }
+
+        $connections = $data['connections'];
+
+        global $wpdb;
+
+        $existing_posts = $wpdb->get_results(
+            "SELECT post_id, meta_value 
+            FROM {$wpdb->postmeta} 
+            WHERE meta_key = 'connection_id'",
+            ARRAY_A
+        );
+
+        $map = [];
+
+        foreach ( $existing_posts as $row ) {
+            $map[$row['meta_value']] = (int) $row['post_id'];
+        }
+
+        $flatten = function( $array, $prefix = '' ) use ( &$flatten ) {
+
+            $result = [];
+
+            foreach ( $array as $key => $value ) {
+
+                $new_key = $prefix ? $prefix . '_' . $key : $key;
+
+                if ( is_array($value) ) {
+                    $result = array_merge($result, $flatten($value, $new_key));
+                } else {
+                    $result[$new_key] = $value;
+                }
+            }
+
+            return $result;
+        };
+
+        $synced = 0;
+        $active_ids = [];
+
+        foreach ( $connections as $connection ) {
+
+            $connection_id = $connection['id'] ?? '';
+            if ( empty($connection_id) ) continue;
+
+            $active_ids[] = $connection_id;
+
+            $expires_at = $connection['plan_info']['active_plan']['expires_at'] ?? null;
+
+            if ( $expires_at ) {
+                $status_label = ( strtotime($expires_at) > time() )
+                    ? 'Active'
+                    : 'Expired';
+            } else {
+                $status_label = 'No Active Plan';
+            }
+
+            $connection_name = $connection['basic_info']['name'] ?? $connection_id;
+
+            if ( isset($map[$connection_id]) ) {
+
+                $post_id = $map[$connection_id];
+
+                wp_update_post([
+                    'ID'         => $post_id,
+                    'post_title' => $connection_name
+                ]);
+
+            } else {
+
+                $post_id = wp_insert_post([
+                    'post_type'   => 'iproxy_connection',
+                    'post_title'  => $connection_name,
+                    'post_status' => 'publish'
+                ]);
+
+                $map[$connection_id] = $post_id;
+            }
+
+            $flat_data = $flatten($connection);
+
+            $flat_data['connection_id'] = $connection_id;
+            $flat_data['status']        = $status_label;
+
+            foreach ( $flat_data as $key => $value ) {
+
+                if ( is_array($value) ) {
+                    $value = wp_json_encode($value);
+                }
+
+                if ( is_bool($value) ) {
+                    $value = $value ? 1 : 0;
+                }
+
+                update_post_meta($post_id, $key, $value);
+            }
+
+            $synced++;
+        }
+
+        foreach ( $map as $conn_id => $post_id ) {
+
+            if ( ! in_array($conn_id, $active_ids, true) ) {
+                update_post_meta($post_id, 'status', 'Not Found');
+            }
+        }
+
+        update_option('iproxy_last_sync', current_time('mysql'));
+    }
+
+
+    // Products Connection Field Selector
+    public function iproxy_connection_under_title($post) {
+
+        // Only for product post type
+        if ($post->post_type !== 'product') {
+            return;
+        }
+
+        // WooCommerce safety check
+        if (!class_exists('WooCommerce')) {
+            return;
+        }
+
+        $selected = get_post_meta($post->ID, '_iproxy_connection_id', true);
+
+        $connections = get_posts([
+            'post_type'   => 'iproxy_connection',
+            'numberposts' => -1
+        ]);
+
+        ?>
+        <div class="postbox" style="margin-top:10px;padding:15px;">
+            <h2 style="margin-bottom:12px;font-size:20px;padding:0;">Assign iProxy Connection to This Product</h2>
+
+            <select name="iproxy_connection_id" style="width:100%;max-width:400px;">
+                <option value="" disabled>Select Connection</option>
+
+                <?php foreach ($connections as $conn):
+
+                    $conn_id = get_post_meta($conn->ID, 'connection_id', true);
+                    $title   = get_the_title($conn->ID);
+
+                ?>
+                    <option value="<?php echo esc_attr($conn_id); ?>"
+                        <?php selected($selected, $conn_id); ?>>
+
+                        <?php echo esc_html($title . ' (' . $conn_id . ')'); ?>
+                    </option>
+                <?php endforeach; ?>
+
+            </select>
+        </div>
+        <?php
+    }
+
+    public function iproxy_save_connection_under_title($post_id) {
+
+        if (!isset($_POST['iproxy_connection_id'])) {
+            return;
+        }
+
+        if (defined('DOING_AUTOSAVE') && DOING_AUTOSAVE) {
+            return;
+        }
+
+        if (!current_user_can('edit_post', $post_id)) {
+            return;
+        }
+
+        update_post_meta(
+            $post_id,
+            '_iproxy_connection_id',
+            sanitize_text_field($_POST['iproxy_connection_id'])
+        );
+    }
+
+public function register_duration_attribute() {
+
+    if ( ! class_exists('WooCommerce') ) {
+        return;
+    }
+
+    static $already_ran = false;
+
+    // 🔒 RUNTIME LOCK (prevents same request duplicates)
+    if ( $already_ran ) {
+        return;
+    }
+
+    $already_ran = true;
+
+    $slug = 'iproxy_duration';
+
+    // 🔍 DB check (NOT cache-based)
+    global $wpdb;
+
+    $exists = $wpdb->get_var(
+        $wpdb->prepare(
+            "SELECT attribute_id FROM {$wpdb->prefix}woocommerce_attribute_taxonomies WHERE attribute_name = %s",
+            $slug
+        )
+    );
+
+    if ( $exists ) {
+        return; // already exists in DB
+    }
+
+    // 🧱 CREATE ATTRIBUTE ONLY ONCE
+    wc_create_attribute([
+        'name'         => 'Plan Duration',
+        'slug'         => $slug,
+        'type'         => 'select',
+        'order_by'     => 'menu_order',
+        'has_archives' => false,
+    ]);
+
+    // 🧹 refresh cache
+    delete_transient('wc_attribute_taxonomies');
+}
+
 
 }
