@@ -23,7 +23,6 @@ final class IPROXY_WC_Connector {
     }
 
     private function define_constants() {
-
         if ( ! defined( 'IPROXY_WC_PATH' ) ) {
             define( 'IPROXY_WC_PATH', plugin_dir_path( __FILE__ ) );
         }
@@ -91,7 +90,6 @@ final class IPROXY_WC_Connector {
     public function settings_page() {
         include plugin_dir_path( __FILE__ ) . 'admin/settings-page.php';
     }
-
 
     public function register_settings() {
         register_setting(
