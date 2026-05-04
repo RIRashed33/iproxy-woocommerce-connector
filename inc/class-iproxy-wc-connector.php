@@ -47,7 +47,6 @@ final class IPROXY_WC_Connector {
     }
 
     public function register_admin_menu() {
-
         add_menu_page(
             'Accounts',
             'iProxy',
@@ -77,6 +76,15 @@ final class IPROXY_WC_Connector {
             [ $this, 'settings_page' ],
             30
         );
+
+        add_submenu_page(
+            null,
+            'Connection',
+            'Connection',
+            'manage_options',
+            'connection',
+            [ $this, 'connection_page']
+        );
     }
 
     public function iproxy_accounts_page() {
@@ -88,7 +96,28 @@ final class IPROXY_WC_Connector {
     }
 
     public function settings_page() {
-        include plugin_dir_path( __FILE__ ) . 'admin/settings-page.php';
+        include IPROXY_WC_PATH . 'admin/settings-page.php';
+    }
+
+    public function connection_page() {
+        if ( ! current_user_can( 'manage_options' ) ) {
+            wp_die( 'Permission denied' );
+        }
+
+        $post_id = isset($_GET['post_id']) ? (int) $_GET['post_id'] : 0;
+
+        // 🚫 BLOCK direct/invalid access
+        if ( ! $post_id ) {
+            wp_die( 'Invalid request' );
+        }
+
+        $post = get_post( $post_id );
+
+        if ( ! $post || $post->post_type !== 'iproxy_connection' ) {
+            wp_die( 'Connection not found' );
+        }
+
+        include IPROXY_WC_PATH . 'admin/connection-single.php';
     }
 
     public function register_settings() {
