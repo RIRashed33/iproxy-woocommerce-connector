@@ -148,6 +148,11 @@ $api_ids = get_post_meta($post_id, 'proxy_ids', true );
 if ( ! is_array($api_ids) ) {
     $api_ids = [];
 }
+
+// echo '<pre>';
+// print_r($proxies);
+// echo '</pre>';
+
 ?>
 
 <div class="wrap">
