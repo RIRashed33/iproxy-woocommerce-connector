@@ -430,103 +430,194 @@ final class IPROXY_WC_Connector {
         delete_transient('wc_attribute_taxonomies');
     }
 
+    //Store proxies in connection
+    public function store_proxies( $prepared_proxies, $order_id ) {
+        global $wpdb;
+        foreach ( $prepared_proxies as $conn_id => $proxy ) {
+            $post_id = $wpdb->get_var( $wpdb->prepare(
+                "SELECT post_id 
+                FROM {$wpdb->postmeta} 
+                WHERE meta_key = 'connection_id' 
+                AND meta_value = %s 
+                LIMIT 1",
+                $conn_id
+            ));
 
-
-public function create_proxies_after_payment($order_id) {
-    $api_key = get_option('iproxy_api_key', '');
-    if ( empty($api_key) ) {
-        error_log("iProxy: missing API key");
-        return;
-    }
-
-    $order = wc_get_order($order_id);
-    if ( ! $order ) {
-        error_log("iProxy: invalid order ID {$order_id}");
-        return;
-    }
-
-    $user_id = $order->get_user_id();
-    if ( ! $user_id ) {
-        error_log("iProxy: guest user, skipping proxy logic for order {$order_id}");
-        return;
-    }
-    $user_proxies = get_user_meta($user_id, '_user_iproxy_proxies', true);
-    if ( ! is_array($user_proxies) ) {
-        $user_proxies = [];
-    }
-
-    // Prepare proxy accesses [con_id => total_days]
-    $proxy_accesses_point = [];
-    foreach ( $order->get_items() as $item ) {
-        if ( ! is_a($item, 'WC_Order_Item_Product') ) continue;
-        $product_id = $item->get_product_id();
-        if ( ! $product_id ) continue;
-
-        $connection_id = get_post_meta($product_id, '_iproxy_connection_id', true);
-        if ( empty($connection_id) ) {
-            error_log("iProxy: missing connection for product {$product_id}");
-            continue;
-        }
-
-        $days = intval($item->get_meta('pa_plan'));
-
-        // fallback safety
-        if ($days === 0) {
-            $days = 3;
-        }
-
-        $qty = $item->get_quantity();
-        $total_days = $days * $qty;
-
-        if ( isset($proxy_accesses_point[$connection_id]) ) {
-            $proxy_accesses_point[$connection_id] += $total_days;
-        } else {
-            $proxy_accesses_point[$connection_id] = $total_days;
-        }
-    }
-
-    $prepared_proxies = [];
-    foreach($proxy_accesses_point as $conn_id => $days){
-        if ( isset($user_proxies[$conn_id]) && !empty($user_proxies[$conn_id]['id']) ) {
-            $existing_proxy = $user_proxies[$conn_id];
-            $proxy_id       = $existing_proxy['id'];
-            $expires_at_raw = $existing_proxy['expires_at'] ?? '';
-            $now = time();
-            $expires_ts = $expires_at_raw ? strtotime($expires_at_raw) : 0;
-            if ( $expires_ts && $expires_ts > $now ) {
-                $base_time = $expires_ts;
-            } else {
-                $base_time = $now;
-            }
-            $expires_at = gmdate('Y-m-d\TH:i:s\Z', strtotime("+{$days} days", $base_time));
-            $body = [
-                'expires_at'     => $expires_at,
-                'description'    => "Order ID: #{$order_id}"
-            ];
-
-            $response = wp_remote_post(
-                "https://iproxy.online/api/console/v1/connection/{$conn_id}/proxy-access/{$proxy_id}/update",
-                [
-                    'headers' => [
-                        'Authorization' => 'Bearer ' . $api_key,
-                        'Content-Type'  => 'application/json',
-                    ],
-                    'body'    => wp_json_encode($body),
-                    'timeout' => 20,
-                ]
-            );
-
-            if(is_wp_error($response) ) {
-                error_log("iProxy API error: " . $response->get_error_message());
+            if ( !$post_id ) {
+                error_log("iProxy: missing post for connection {$conn_id}");
                 continue;
             }
 
-            $code = wp_remote_retrieve_response_code($response);
-            $data = json_decode(wp_remote_retrieve_body($response), true);
-            if ( $code === 201 || !empty($data['id']) ) {
-                $prepared_proxies[$conn_id] = $data;
-                $user_proxies[$conn_id] = $data;
-            } elseif ($code === 404) {
+            // Load existing proxies
+            $proxies = get_post_meta($post_id, 'proxy_accesses', true);
+
+            if ( ! is_array($proxies) ) {
+                $proxies = [];
+            }
+
+            // Add proxy
+            $proxy_id = $proxy['id'];
+            $proxy['order_id'] = "#" . $order_id;
+            $proxy['iproxy_exists'] = 1;
+            $proxies[$proxy_id] = $proxy;
+
+            // Load API IDs
+            $api_ids = get_post_meta($post_id, 'proxy_ids', true);
+
+            if ( ! is_array($api_ids) ) {
+                $api_ids = [];
+            }
+
+            if ( ! in_array($proxy_id, $api_ids, true) ) {
+                $api_ids[] = $proxy_id;
+            }
+
+            // Save
+            update_post_meta($post_id, 'proxy_accesses', $proxies);
+            update_post_meta($post_id, 'proxy_ids', $api_ids);
+        }
+    }
+
+
+    public function create_proxies_after_payment($order_id) {
+        $api_key = get_option('iproxy_api_key', '');
+        if ( empty($api_key) ) {
+            error_log("iProxy: missing API key");
+            return;
+        }
+
+        $order = wc_get_order($order_id);
+        if ( ! $order ) {
+            error_log("iProxy: invalid order ID {$order_id}");
+            return;
+        }
+
+        $user_proxies = [];
+        // $user_id = $order->get_user_id();
+        // if ($user_id) {
+        //     $user_proxies = get_user_meta($user_id, '_user_iproxy_proxies', true);
+        // }else {
+        //     error_log("iProxy: guest user, skipping proxy logic for order {$order_id}");
+        // }
+        $email = strtolower( trim( $order->get_billing_email() ) );
+        $email_key = '_user_iproxy_proxies' . md5( $email );
+        if (!empty( $email )) {
+            $user_proxies = get_option( $email_key, [] );
+            if ( ! is_array( $user_proxies ) ) {
+                $user_proxies = [];
+            }
+        } else {
+            error_log("iProxy: missing email for order {$order_id}");
+        }
+
+        // Prepare proxy accesses [con_id => total_days]
+        $proxy_accesses_point = [];
+        foreach ( $order->get_items() as $item ) {
+            if ( ! is_a($item, 'WC_Order_Item_Product') ) continue;
+            $product_id = $item->get_product_id();
+            if ( ! $product_id ) continue;
+
+            $connection_id = get_post_meta($product_id, '_iproxy_connection_id', true);
+            if ( empty($connection_id) ) {
+                error_log("iProxy: missing connection for product {$product_id}");
+                continue;
+            }
+
+            $days = intval($item->get_meta('pa_plan'));
+
+            // fallback safety
+            if ($days === 0) {
+                $days = 3;
+            }
+
+            $qty = $item->get_quantity();
+            $total_days = $days * $qty;
+
+            if ( isset($proxy_accesses_point[$connection_id]) ) {
+                $proxy_accesses_point[$connection_id] += $total_days;
+            } else {
+                $proxy_accesses_point[$connection_id] = $total_days;
+            }
+        }
+
+        $prepared_proxies = [];
+        foreach($proxy_accesses_point as $conn_id => $days){
+            if ( isset($user_proxies[$conn_id]) && !empty($user_proxies[$conn_id]['id']) ) {
+                $existing_proxy = $user_proxies[$conn_id];
+                $proxy_id       = $existing_proxy['id'];
+                $expires_at_raw = $existing_proxy['expires_at'] ?? '';
+                $now = time();
+                $expires_ts = $expires_at_raw ? strtotime($expires_at_raw) : 0;
+                if ( $expires_ts && $expires_ts > $now ) {
+                    $base_time = $expires_ts;
+                } else {
+                    $base_time = $now;
+                }
+                $expires_at = gmdate('Y-m-d\TH:i:s\Z', strtotime("+{$days} days", $base_time));
+                $body = [
+                    'expires_at'     => $expires_at,
+                    'description'    => "Order ID: #{$order_id}"
+                ];
+
+                $response = wp_remote_post(
+                    "https://iproxy.online/api/console/v1/connection/{$conn_id}/proxy-access/{$proxy_id}/update",
+                    [
+                        'headers' => [
+                            'Authorization' => 'Bearer ' . $api_key,
+                            'Content-Type'  => 'application/json',
+                        ],
+                        'body'    => wp_json_encode($body),
+                        'timeout' => 20,
+                    ]
+                );
+
+                if(is_wp_error($response) ) {
+                    error_log("iProxy API error: " . $response->get_error_message());
+                    continue;
+                }
+
+                $code = wp_remote_retrieve_response_code($response);
+                $data = json_decode(wp_remote_retrieve_body($response), true);
+                if ( $code === 201 || !empty($data['id']) ) {
+                    $prepared_proxies[$conn_id] = $data;
+                    $user_proxies[$conn_id] = $data;
+                } elseif ($code === 404) {
+                    $expires_at = gmdate('Y-m-d\TH:i:s\Z', strtotime("+{$days} days"));
+                    $body = [
+                        'listen_service' => 'socks5',
+                        'auth_type'      => 'userpass',
+                        'description'    => "Order ID: #{$order_id}",
+                        'expires_at'     => $expires_at,
+                    ];
+
+                    $response = wp_remote_post(
+                        "https://iproxy.online/api/console/v1/connection/{$conn_id}/proxy-access",
+                        [
+                            'headers' => [
+                                'Authorization' => 'Bearer ' . $api_key,
+                                'Content-Type'  => 'application/json',
+                            ],
+                            'body'    => wp_json_encode($body),
+                            'timeout' => 20,
+                        ]
+                    );
+
+                    if ( is_wp_error($response) ) {
+                        error_log("iProxy API error: " . $response->get_error_message());
+                        continue;
+                    }
+
+                    $code = wp_remote_retrieve_response_code($response);
+                    $data = json_decode(wp_remote_retrieve_body($response), true);
+                    if ( $code !== 201 || empty($data['id']) ) {
+                        error_log("iProxy: Failed to create new api");
+                        continue;
+                    }
+
+                    $prepared_proxies[$conn_id] = $data;
+                    $user_proxies[$conn_id] = $data;
+                }
+            } else {
                 $expires_at = gmdate('Y-m-d\TH:i:s\Z', strtotime("+{$days} days"));
                 $body = [
                     'listen_service' => 'socks5',
@@ -562,99 +653,34 @@ public function create_proxies_after_payment($order_id) {
                 $prepared_proxies[$conn_id] = $data;
                 $user_proxies[$conn_id] = $data;
             }
+        }
+
+        // Store proxies in Connection
+        $this->store_proxies( $prepared_proxies, $order_id );
+        // Store proxies in Option By email and send Email
+        if ( ! empty( $email ) ) {
+            update_option( $email_key, $user_proxies );
+            //SEND EMAIL AFTER SAVE
+            $subject = "Your Proxy Details - Order #{$order_id}";
+            $message = "Hello,\n\nYour proxy has been activated:\n\n";
+
+            if(is_array($prepared_proxies)){
+                foreach ( $prepared_proxies as $conn_id => $proxy ) {
+                    $host = $proxy['hostname'] ?? '';
+                    $port = $proxy['port'] ?? '';
+                    $user = $proxy['auth']['login'] ?? '';
+                    $pass = $proxy['auth']['password'] ?? '';
+                    $expire_raw = $proxy['expires_at'] ?? '';
+                    $expire = $expire_raw ? date('d M Y, h:i A', strtotime($expire_raw)) : 'No Expiry';
+                    $message .= "Proxy: {$host}:{$port}:{$user}:{$pass} \n";
+                    $message .= "Expire Date: {$expire}\n";
+                    $message .= "------------------------\n";
+                }
+            }
+            $message .= "Please purchase again before expiry.\n";
+            wp_mail( $email, $subject, $message );
         } else {
-            $expires_at = gmdate('Y-m-d\TH:i:s\Z', strtotime("+{$days} days"));
-            $body = [
-                'listen_service' => 'socks5',
-                'auth_type'      => 'userpass',
-                'description'    => "Order ID: #{$order_id}",
-                'expires_at'     => $expires_at,
-            ];
-
-            $response = wp_remote_post(
-                "https://iproxy.online/api/console/v1/connection/{$conn_id}/proxy-access",
-                [
-                    'headers' => [
-                        'Authorization' => 'Bearer ' . $api_key,
-                        'Content-Type'  => 'application/json',
-                    ],
-                    'body'    => wp_json_encode($body),
-                    'timeout' => 20,
-                ]
-            );
-
-            if ( is_wp_error($response) ) {
-                error_log("iProxy API error: " . $response->get_error_message());
-                continue;
-            }
-
-            $code = wp_remote_retrieve_response_code($response);
-            $data = json_decode(wp_remote_retrieve_body($response), true);
-            if ( $code !== 201 || empty($data['id']) ) {
-                error_log("iProxy: Failed to create new api");
-                continue;
-            }
-
-            $prepared_proxies[$conn_id] = $data;
-            $user_proxies[$conn_id] = $data;
+            error_log("iProxy: missing email for order {$order_id}");
         }
     }
-
-    //Store proxies in connection
-    global $wpdb;
-    foreach ( $prepared_proxies as $conn_id => $proxy ) {
-        $post_id = $wpdb->get_var( $wpdb->prepare(
-            "SELECT post_id 
-            FROM {$wpdb->postmeta} 
-            WHERE meta_key = 'connection_id' 
-            AND meta_value = %s 
-            LIMIT 1",
-            $conn_id
-        ));
-
-        if ( !$post_id ) {
-            error_log("iProxy: missing post for connection {$conn_id}");
-            continue;
-        }
-
-        // Load existing proxies
-        $proxies = get_post_meta($post_id, 'proxy_accesses', true);
-
-        if ( ! is_array($proxies) ) {
-            $proxies = [];
-        }
-
-        // Add proxy
-        $proxy_id = $proxy['id'];
-        $proxy['order_id'] = "#" . $order_id;
-        $proxy['iproxy_exists'] = 1;
-        $proxies[$proxy_id] = $proxy;
-
-        // Load API IDs
-        $api_ids = get_post_meta($post_id, 'proxy_ids', true);
-
-        if ( ! is_array($api_ids) ) {
-            $api_ids = [];
-        }
-
-        if ( ! in_array($proxy_id, $api_ids, true) ) {
-            $api_ids[] = $proxy_id;
-        }
-
-        // Save
-        update_post_meta($post_id, 'proxy_accesses', $proxies);
-        update_post_meta($post_id, 'proxy_ids', $api_ids);
-    }
-
-    // Store proxies in User
-    update_user_meta($user_id, '_user_iproxy_proxies', $user_proxies);
-
-
-
-}
-
-
-
-
-
 }
