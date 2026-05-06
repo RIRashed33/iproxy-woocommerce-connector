@@ -1,13 +1,35 @@
+<?php
+if (!defined( 'ABSPATH' ) ) exit;
+
+$api_key = get_option( 'iproxy_api_key', '' );
+if ( empty( $api_key ) ) {
+    echo '<div class="notice notice-error inline"><p>Please connect a valid API key in Settings.</p></div>';
+    return;
+}
+
+$sync_status = '';
+if ( isset($_POST['iproxy_sync']) ) {
+    if (
+        ! isset($_POST['iproxy_sync_nonce']) ||
+        ! wp_verify_nonce($_POST['iproxy_sync_nonce'], 'iproxy_sync_connections')
+    ) {
+        wp_die('Security check failed');
+    }
+
+    if ( ! current_user_can('manage_options') ) {
+        wp_die('Permission denied');
+    }
+
+    // ✅ CALL CLASS METHOD (IMPORTANT CHANGE)
+    if ( class_exists('IPROXY\\Connector\\IPROXY_WC_Connector') ) {
+        IPROXY\Connector\IPROXY_WC_Connector::instance()->sync_all_connections();
+    }
+    $sync_status = 'Syncing proxy data from iProxy...';
+}
+?>
 <div class="wrap">
     <h1>iProxy Account</h1>
-
     <?php
-    $api_key = get_option( 'iproxy_api_key', '' );
-
-    if ( empty( $api_key ) ) {
-        echo '<div class="notice notice-error inline"><p>Please connect a valid API key in Settings.</p></div>';
-        return;
-    }
 
     $response = wp_remote_get(
         'https://iproxy.online/api/console/v1/me',
@@ -90,6 +112,19 @@
         <p><strong>Notifications:</strong> <?php echo ! empty( $subs['notifications'] ) ? 'Yes' : 'No'; ?></p>
         <p><strong>Promotions:</strong> <?php echo ! empty( $subs['promotions'] ) ? 'Yes' : 'No'; ?></p>
 
+        <hr>
+
+        <?php if($status === 200 || !empty( $body )) : ?>
+        <form method="post">
+            <?php wp_nonce_field('iproxy_sync_connections', 'iproxy_sync_nonce'); ?>
+            <input type="submit" name="iproxy_sync" class="button button-primary" value="Sync Connections">
+        </form>
+        <hr>
+        <?php if(!empty($sync_status)) : ?>
+        <div class="notice notice-success inline">
+            <p><?php echo esc_html( $sync_status ); ?></p>
+        </div>
+        <?php endif; endif; ?>
     </div>
 
 </div>

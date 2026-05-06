@@ -59,7 +59,7 @@ if ( isset($_POST['iproxy_sync']) ) {
         <div style="display:flex;align-items:center;gap:24px;">
             <form method="post">
                 <?php wp_nonce_field('iproxy_sync_connections', 'iproxy_sync_nonce'); ?>
-                <input type="submit" name="iproxy_sync" class="button button-primary" value="Sync All Connections">
+                <input type="submit" name="iproxy_sync" class="button button-primary" value="Sync Connections">
             </form>
 
             <?php
@@ -120,7 +120,7 @@ if ( isset($_POST['iproxy_sync']) ) {
 
                     <a class="button"
                        href="<?php echo admin_url('admin.php?page=connection&post_id=' . $post->ID); ?>">
-                        View
+                        View All Proxies
                     </a>
 
                     <form method="post" style="display:inline-block;">

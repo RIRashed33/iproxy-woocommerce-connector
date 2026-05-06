@@ -165,7 +165,7 @@ if ( ! is_array($api_ids) ) {
 
             <form method="post">
                 <?php wp_nonce_field( 'iproxy_connection_proxy_sync', 'connection_proxy_nonce' ); ?>
-                <input type="submit" name="connection_proxy_sync" class="button button-primary" value="Sync">
+                <input type="submit" name="connection_proxy_sync" class="button button-primary" value="Update Proxies">
             </form>
 
             <?php

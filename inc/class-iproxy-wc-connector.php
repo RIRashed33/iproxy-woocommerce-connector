@@ -191,9 +191,7 @@ final class IPROXY_WC_Connector {
 
     // All Connection
     public function sync_all_connections() {
-
         $api_key = get_option('iproxy_api_key', '');
-
         if ( empty($api_key) ) {
             return;
         }
@@ -222,7 +220,6 @@ final class IPROXY_WC_Connector {
         $connections = $data['connections'];
 
         global $wpdb;
-
         $existing_posts = $wpdb->get_results(
             "SELECT post_id, meta_value 
             FROM {$wpdb->postmeta} 
@@ -237,33 +234,26 @@ final class IPROXY_WC_Connector {
         }
 
         $flatten = function( $array, $prefix = '' ) use ( &$flatten ) {
-
             $result = [];
-
             foreach ( $array as $key => $value ) {
-
                 $new_key = $prefix ? $prefix . '_' . $key : $key;
-
                 if ( is_array($value) ) {
                     $result = array_merge($result, $flatten($value, $new_key));
                 } else {
                     $result[$new_key] = $value;
                 }
             }
-
             return $result;
         };
 
         $synced = 0;
         $active_ids = [];
 
-        foreach ( $connections as $connection ) {
+        foreach ($connections as $connection) {
 
             $connection_id = $connection['id'] ?? '';
             if ( empty($connection_id) ) continue;
-
             $active_ids[] = $connection_id;
-
             $expires_at = $connection['plan_info']['active_plan']['expires_at'] ?? null;
 
             if ( $expires_at ) {
@@ -313,18 +303,77 @@ final class IPROXY_WC_Connector {
 
                 update_post_meta($post_id, $key, $value);
             }
-
             $synced++;
         }
 
         foreach ( $map as $conn_id => $post_id ) {
-
             if ( ! in_array($conn_id, $active_ids, true) ) {
                 update_post_meta($post_id, 'status', 'Not Found');
+            } else {
+                $this->sync_connection_proxies( $conn_id, $post_id );
             }
         }
 
         update_option('iproxy_last_sync', current_time('mysql'));
+    }
+
+    //Sync Connection Proxies
+    public function sync_connection_proxies ( $connection_id, $post_id ) {
+        $api_key = get_option('iproxy_api_key', '');
+        if (empty($api_key)) {
+            error_log("iProxy: Missing API key. Proxy update cannot proceed.");
+            return;
+        }
+
+        $response = wp_remote_get(
+            'https://iproxy.online/api/console/v1/connection/' . $connection_id . '/proxy-access',
+            [
+                'headers' => [
+                    'Authorization' => 'Bearer ' . $api_key
+                ],
+                'timeout' => 20,
+            ]
+        );
+
+        if ( is_wp_error($response) ) {
+            error_log("iProxy: API request failed. Proxy update cannot proceed.");
+        }
+
+        $data = json_decode(wp_remote_retrieve_body($response), true);
+        $proxy_accesses = $data['proxy_accesses'] ?? [];
+
+        if (!is_array($proxy_accesses) ) {
+            $proxy_accesses = [];
+        }
+
+        $api_index = [];
+        $api_ids   = [];
+        foreach ( $proxy_accesses as $proxy ) {
+            $id = $proxy['id'] ?? '';
+            if ( empty($id) ) continue;
+            $api_index[$id] = $proxy;
+            $api_ids[] = $id;
+        }
+
+        $saved_index = get_post_meta($post_id, 'proxy_accesses', true );
+        if ( ! is_array($saved_index) ) {
+            $saved_index = [];
+        }
+        $final_index = $saved_index;
+
+        foreach ( $final_index as $sid => $sp ) {
+            $final_index[$sid]['iproxy_exists'] = 0;
+        }
+
+        foreach ( $api_index as $id => $proxy ) {
+            $proxy['iproxy_exists'] = 1;
+            $proxy['order_id'] = $saved_index[$id]['order_id'] ?? '';
+            $final_index[$id] = $proxy;
+        }
+
+        update_post_meta($post_id, 'proxy_accesses', $final_index);
+        update_post_meta($post_id, 'proxy_ids', $api_ids);
+        update_post_meta($post_id, 'connection_proxy_last_sync', current_time('mysql'));
     }
 
 
@@ -353,7 +402,7 @@ final class IPROXY_WC_Connector {
             <h2 style="margin-bottom:12px;font-size:20px;padding:0;">Assign iProxy Connection to This Product</h2>
 
             <select name="iproxy_connection_id" style="width:100%;max-width:400px;">
-                <option value="" disabled>Select Connection</option>
+                <option value="" disabled selected>Select Connection</option>
 
                 <?php foreach ($connections as $conn):
 
@@ -674,7 +723,7 @@ final class IPROXY_WC_Connector {
                     $expire = $expire_raw ? date('d M Y, h:i A', strtotime($expire_raw)) : 'No Expiry';
                     $message .= "Proxy: {$host}:{$port}:{$user}:{$pass} \n";
                     $message .= "Expire Date: {$expire}\n";
-                    $message .= "------------------------\n";
+                    $message .= "----------------------------------------------\n";
                 }
             }
             $message .= "Please purchase again before expiry.\n";
