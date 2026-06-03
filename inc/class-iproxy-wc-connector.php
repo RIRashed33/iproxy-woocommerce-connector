@@ -18,26 +18,7 @@ final class IPROXY_WC_Connector {
     }
 
     private function __construct() {
-        $this->define_constants();
         $this->init_hooks();
-    }
-
-    private function define_constants() {
-        if ( ! defined( 'IPROXY_WC_PATH' ) ) {
-            define( 'IPROXY_WC_PATH', plugin_dir_path( __FILE__ ) );
-        }
-
-        if ( ! defined( 'IPROXY_WC_URL' ) ) {
-            define( 'IPROXY_WC_URL', plugin_dir_url( __FILE__ ) );
-        }
-
-        if ( ! defined( 'IPROXY_WC_BASENAME' ) ) {
-            define( 'IPROXY_WC_BASENAME', plugin_basename( __FILE__ ) );
-        }
-
-        if ( ! defined( 'IPROXY_WC_VERSION' ) ) {
-            define( 'IPROXY_WC_VERSION', '1.0.0' );
-        }
     }
 
     private function init_hooks() {
@@ -59,6 +40,52 @@ final class IPROXY_WC_Connector {
             }
 
         }, 10, 1);
+    }
+
+    /**
+     * Write message to plugin debug log.
+     *
+     * @param mixed $message Log message.
+     *
+     * @return bool
+     */
+    public static function log( $message ) {
+        $log_file = IPROXY_WC_PATH . 'debug.log';
+
+        // Convert any value to string.
+        if ( is_array( $message ) || is_object( $message ) ) {
+            $message = print_r( $message, true );
+        } elseif ( is_bool( $message ) ) {
+            $message = $message ? 'TRUE' : 'FALSE';
+        } elseif ( null === $message ) {
+            $message = 'NULL';
+        } else {
+            $message = (string) $message;
+        }
+
+        // Create log file if missing.
+        if (!file_exists($log_file)){
+            @touch( $log_file );
+        }
+
+        // Bangladesh time.
+        $datetime = new \DateTime(
+            'now',
+            new \DateTimeZone( 'Asia/Dhaka' )
+        );
+
+        $log_entry = sprintf(
+            "[%s] - %s%s",
+            $datetime->format( 'Y-m-d H:i:s' ),
+            trim( $message ),
+            PHP_EOL
+        );
+
+        return (bool) @file_put_contents(
+            $log_file,
+            $log_entry,
+            FILE_APPEND | LOCK_EX
+        );
     }
 
     public function register_admin_menu() {
@@ -103,15 +130,15 @@ final class IPROXY_WC_Connector {
     }
 
     public function iproxy_accounts_page() {
-        include IPROXY_WC_PATH . 'admin/iproxy_accounts_page.php';
+        include IPROXY_WC_PATH . 'inc/admin/iproxy_accounts_page.php';
     }
 
     public function iproxy_connections_page() {
-        include IPROXY_WC_PATH . 'admin/iproxy_connections_page.php';
+        include IPROXY_WC_PATH . 'inc/admin/iproxy_connections_page.php';
     }
 
     public function settings_page() {
-        include IPROXY_WC_PATH . 'admin/settings-page.php';
+        include IPROXY_WC_PATH . 'inc/admin/settings-page.php';
     }
 
     public function connection_page() {
@@ -132,7 +159,7 @@ final class IPROXY_WC_Connector {
             wp_die( 'Connection not found' );
         }
 
-        include IPROXY_WC_PATH . 'admin/connection-single.php';
+        include IPROXY_WC_PATH . 'inc/admin/connection-single.php';
     }
 
     public function register_settings() {
@@ -248,14 +275,19 @@ final class IPROXY_WC_Connector {
 
         $synced = 0;
         $active_ids = [];
-
+        $connection_types = [];
         foreach ($connections as $connection) {
-
             $connection_id = $connection['id'] ?? '';
             if ( empty($connection_id) ) continue;
+
+            $description = $connection['basic_info']['description'] ?? 'Undefined';
+            if ( ! isset( $connection_types[ $description ] ) ) {
+                $connection_types[ $description ] = [];
+            }
+            $connection_types[ $description ][] = $connection_id;
+
             $active_ids[] = $connection_id;
             $expires_at = $connection['plan_info']['active_plan']['expires_at'] ?? null;
-
             if ( $expires_at ) {
                 $status_label = ( strtotime($expires_at) > time() )
                     ? 'Active'
@@ -314,6 +346,7 @@ final class IPROXY_WC_Connector {
             }
         }
 
+        update_option('iproxy_connection_types', $connection_types);
         update_option('iproxy_last_sync', current_time('mysql'));
     }
 
@@ -379,7 +412,6 @@ final class IPROXY_WC_Connector {
 
     // Products Connection Field Selector
     public function iproxy_connection_under_title($post) {
-
         // Only for product post type
         if ($post->post_type !== 'product') {
             return;
@@ -390,41 +422,26 @@ final class IPROXY_WC_Connector {
             return;
         }
 
-        $selected = get_post_meta($post->ID, '_iproxy_connection_id', true);
-
-        $connections = get_posts([
-            'post_type'   => 'iproxy_connection',
-            'numberposts' => -1
-        ]);
+        $selected = get_post_meta($post->ID, '_iproxy_connection_selected_type', true);
+        $connection_types = get_option('iproxy_connection_types', []);
 
         ?>
         <div class="postbox" style="margin-top:10px;padding:15px;">
-            <h2 style="margin-bottom:12px;font-size:20px;padding:0;">Assign iProxy Connection to This Product</h2>
-
-            <select name="iproxy_connection_id" style="width:100%;max-width:400px;">
-                <option value="" disabled selected>Select Connection</option>
-
-                <?php foreach ($connections as $conn):
-
-                    $conn_id = get_post_meta($conn->ID, 'connection_id', true);
-                    $title   = get_the_title($conn->ID);
-
-                ?>
-                    <option value="<?php echo esc_attr($conn_id); ?>"
-                        <?php selected($selected, $conn_id); ?>>
-
-                        <?php echo esc_html($title . ' (' . $conn_id . ')'); ?>
+            <h2 style="margin-bottom:12px;font-size:20px;padding:0;">Assign iProxy Connection Type to This Product</h2>
+            <select name="iproxy_connection_type" style="width:100%;max-width:400px;">
+                <option value="" disabled selected>Select Connection Type</option>
+                <?php if(!empty($connection_types)) : foreach ($connection_types as $conn_type => $conn_ids): ?>
+                    <option value="<?php echo esc_attr($conn_type); ?>" <?php selected($selected, $conn_type); ?>>
+                        <?php echo esc_html($conn_type); ?>
                     </option>
-                <?php endforeach; ?>
-
+                <?php endforeach; endif; ?>
             </select>
         </div>
         <?php
     }
 
     public function iproxy_save_connection_under_title($post_id) {
-
-        if (!isset($_POST['iproxy_connection_id'])) {
+        if (!isset($_POST['iproxy_connection_type'])) {
             return;
         }
 
@@ -438,8 +455,8 @@ final class IPROXY_WC_Connector {
 
         update_post_meta(
             $post_id,
-            '_iproxy_connection_id',
-            sanitize_text_field($_POST['iproxy_connection_id'])
+            '_iproxy_connection_selected_type',
+            sanitize_text_field($_POST['iproxy_connection_type'])
         );
     }
 

@@ -15,10 +15,26 @@ if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
+if ( ! defined( 'IPROXY_WC_PATH' ) ) {
+    define( 'IPROXY_WC_PATH', plugin_dir_path( __FILE__ ) );
+}
+
+if ( ! defined( 'IPROXY_WC_URL' ) ) {
+    define( 'IPROXY_WC_URL', plugin_dir_url( __FILE__ ) );
+}
+
+if ( ! defined( 'IPROXY_WC_BASENAME' ) ) {
+    define( 'IPROXY_WC_BASENAME', plugin_basename( __FILE__ ) );
+}
+
+if ( ! defined( 'IPROXY_WC_VERSION' ) ) {
+    define( 'IPROXY_WC_VERSION', '1.0.0' );
+}
+
 /**
  * Load core class
  */
-require_once plugin_dir_path( __FILE__ ) . 'inc/class-iproxy-wc-connector.php';
+require_once IPROXY_WC_PATH . 'inc/class-iproxy-wc-connector.php';
 
 /**
  * Start
