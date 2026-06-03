@@ -82,6 +82,7 @@ if ( isset($_POST['iproxy_sync']) ) {
         <thead>
             <tr>
                 <th>Name</th>
+                <th>Type</th>
                 <th>ID</th>
                 <th>Status</th>
                 <th>External IP</th>
@@ -94,13 +95,16 @@ if ( isset($_POST['iproxy_sync']) ) {
         <?php foreach ( $posts as $post ) :
 
             $id     = get_post_meta($post->ID, 'connection_id', true);
+            $connection_type = get_post_meta($post->ID, 'connection_type', true);
             $status = get_post_meta($post->ID, 'status', true);
-            $ip     = get_post_meta($post->ID, 'app_data_device_info_ip_public_ipv4', true);
-            $sim    = get_post_meta($post->ID, 'app_data_device_info_network_operator_mobile', true);
+            $ip     = get_post_meta($post->ID, 'external_ip', true);
+            $sim    = get_post_meta($post->ID, 'network_operator_mobile', true);
 
         ?>
             <tr>
                 <td><?php echo esc_html(get_the_title($post->ID)); ?></td>
+
+                <td><?php echo esc_html($connection_type); ?></td>
 
                 <td><?php echo esc_html($id); ?></td>
 
