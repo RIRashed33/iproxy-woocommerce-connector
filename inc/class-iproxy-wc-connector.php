@@ -28,6 +28,7 @@ final class IPROXY_WC_Connector {
         add_action('edit_form_after_title', [$this, 'iproxy_connection_under_title']);
         add_action('save_post_product', [$this, 'iproxy_save_connection_under_title']);
         add_action('init', [ $this, 'register_plan_attribute' ]);
+        add_action('iproxy_sync_connection_proxies', [ $this, 'sync_connection_proxies' ], 10, 2);
 
         //woocommerce_thankyou
         //woocommerce_payment_complete
@@ -219,7 +220,6 @@ final class IPROXY_WC_Connector {
     // All Connection
     public function sync_all_connections() {
         $api_key = get_option('iproxy_api_key', '');
-        $connection_history = get_option('iproxy_connection_history', []);
         if ( empty($api_key) ) {
             return;
         }
@@ -260,13 +260,12 @@ final class IPROXY_WC_Connector {
             $existing_connections[$row['meta_value']] = (int) $row['post_id'];
         }
 
-        $synced = 0;
         $active_ids = [];
         foreach ($connections as $connection) {
             $connection_id = $connection['id'] ?? '';
             if ( empty($connection_id) ) continue;
 
-            $active_ids[] = $connection_id;
+            $active_ids[ $connection_id ] = true;
             $expires_at = $connection['plan_info']['active_plan']['expires_at'] ?? null;
             if ( $expires_at ) {
                 $status_label = ( strtotime($expires_at) > time() )
@@ -296,19 +295,38 @@ final class IPROXY_WC_Connector {
                 continue;
             }
 
-            update_post_meta($post_id, 'connection_type', $connection['basic_info']['description'] ?? 'Undefined');
+            update_post_meta($post_id, 'connection_type', strtoupper(trim($connection['basic_info']['description'] ?? 'UNDEFINED')));
             update_post_meta($post_id, 'connection_id', $connection_id);
             update_post_meta($post_id, 'status', $status_label);
-            update_post_meta($post_id, 'external_ip', $connection['device_info']['ip_public']['ipv4'] ?? '00.00.000.00');
-            update_post_meta($post_id, 'network_operator_mobile', $connection['device_info']['network_operator_mobile'] ?? 'Undefined');
+            update_post_meta($post_id, 'external_ip', $connection['app_data']['device_info']['ip_public']['ipv4'] ?? '00.00.000.00');
+            update_post_meta($post_id, 'network_operator_mobile', $connection['app_data']['device_info']['network_operator_mobile'] ?? 'Undefined');
 
-            $synced++;
+            if ( function_exists( 'as_enqueue_async_action' ) ) {
+                if (
+                    ! function_exists( 'as_has_scheduled_action' ) ||
+                    ! as_has_scheduled_action(
+                        'iproxy_sync_connection_proxies',
+                        [
+                            'post_id'       => $post_id,
+                            'connection_id' => $connection_id,
+                        ],
+                        'iproxy'
+                    )
+                ) {
+                    as_enqueue_async_action(
+                        'iproxy_sync_connection_proxies',
+                        [
+                            'post_id'       => $post_id,
+                            'connection_id' => $connection_id,
+                        ],
+                        'iproxy'
+                    );
+                }
+            }
         }
 
         foreach ( $existing_connections as $conn_id => $post_id ) {
-            if (in_array($conn_id, $active_ids, true)){
-                $this->sync_connection_proxies( $conn_id, $post_id );
-            } else {
+            if (!isset($active_ids[$conn_id])){
                 update_post_meta($post_id, 'status', 'Not Found in iProxy');
             }
         }
@@ -316,21 +334,23 @@ final class IPROXY_WC_Connector {
         update_option('iproxy_last_sync', current_time('mysql'));
     }
 
-
-
-
-
-
-
-
-
-    //Start Here
     //Sync Connection Proxies
-    public function sync_connection_proxies ( $connection_id, $post_id ) {
+    public function sync_connection_proxies ( $post_id, $connection_id ) {
+        if ( empty($connection_id) || empty($post_id) ) {
+            self::log("iProxy: Invalid connection ID and post ID. Proxy update cannot proceed.");
+            return;
+        }
+
         $api_key = get_option('iproxy_api_key', '');
         if (empty($api_key)) {
             self::log("iProxy: Missing API key. Proxy update cannot proceed.");
             return;
+        }
+
+        // Existing Proxies
+        $saved_proxies = get_post_meta($post_id, 'proxy_accesses', true );
+        if ( ! is_array($saved_proxies) ) {
+            $saved_proxies = [];
         }
 
         $response = wp_remote_get(
@@ -343,8 +363,22 @@ final class IPROXY_WC_Connector {
             ]
         );
 
-        if ( is_wp_error($response) ) {
-            self::log("iProxy: API request failed. Proxy update cannot proceed.");
+        if ( is_wp_error( $response ) ) {
+            self::log( $response->get_error_message() );
+            return;
+        }
+
+        $status = wp_remote_retrieve_response_code( $response );
+
+        if ( 200 !== $status ) {
+            self::log(
+                sprintf(
+                    'iProxy: Proxy sync failed. Connection: %s Status: %s',
+                    $connection_id,
+                    $status
+                )
+            );
+            return;
         }
 
         $data = json_decode(wp_remote_retrieve_body($response), true);
@@ -354,33 +388,55 @@ final class IPROXY_WC_Connector {
             $proxy_accesses = [];
         }
 
-        $api_index = [];
-        $api_ids   = [];
+        // API Proxies
+        $api_proxies = [];
         foreach ( $proxy_accesses as $proxy ) {
-            $id = $proxy['id'] ?? '';
-            if ( empty($id) ) continue;
-            $api_index[$id] = $proxy;
-            $api_ids[] = $id;
+            $proxy_id = $proxy['id'] ?? '';
+            if ( empty($proxy_id) ) continue;
+
+            $expires_at = $proxy['expires_at'] ?? null;
+            if(empty($expires_at) || strtotime($expires_at) > time()){
+                $proxy['order_id'] = $saved_proxies[$proxy_id]['order_id'] ?? '';
+                $api_proxies[$proxy_id] = $proxy;
+            } else {
+                $response = wp_remote_request(
+                    "https://iproxy.online/api/console/v1/connection/{$connection_id}/proxy-access/{$proxy_id}",
+                    [
+                        'method'  => 'DELETE',
+                        'headers' => [
+                            'Authorization' => 'Bearer ' . $api_key
+                        ],
+                        'timeout' => 20,
+                    ]
+                );
+
+                $status = wp_remote_retrieve_response_code($response);
+                if ( is_wp_error($response) || $status !== 200 ){
+                    self::log("Failed deleting proxy {$proxy_id} and connection {$connection_id} during sync. Status: {$status}");
+                }
+            }
         }
 
-        $saved_index = get_post_meta($post_id, 'proxy_accesses', true );
-        if ( ! is_array($saved_index) ) {
-            $saved_index = [];
+        $count_proxies = count($api_proxies);
+        $connction_type = strtoupper(trim(get_post_meta($post_id, 'connection_type', true) ?? 'UNDEFINED'));
+        if($connction_type !== 'UNDEFINED'){
+            if ( strpos( $connction_type, 'PRIVATE' ) !== false ) {
+                if($count_proxies < 2){
+                    update_post_meta($post_id, 'is_available', 1);
+                }else {
+                    update_post_meta($post_id, 'is_available', 0);
+                }
+            } elseif ( strpos( $connction_type, 'SHARED' ) !== false ) {
+                if($count_proxies < 4){
+                    update_post_meta($post_id, 'is_available', 1);
+                }else {
+                    update_post_meta($post_id, 'is_available', 0);
+                }
+            }
         }
-        $final_index = $saved_index;
 
-        foreach ( $final_index as $sid => $sp ) {
-            $final_index[$sid]['iproxy_exists'] = 0;
-        }
-
-        foreach ( $api_index as $id => $proxy ) {
-            $proxy['iproxy_exists'] = 1;
-            $proxy['order_id'] = $saved_index[$id]['order_id'] ?? '';
-            $final_index[$id] = $proxy;
-        }
-
-        update_post_meta($post_id, 'proxy_accesses', $final_index);
-        update_post_meta($post_id, 'proxy_ids', $api_ids);
+        update_post_meta($post_id, 'proxy_accesses', $api_proxies);
+        update_post_meta($post_id, 'active_proxy_count', $count_proxies);
         update_post_meta($post_id, 'connection_proxy_last_sync', current_time('mysql'));
     }
 

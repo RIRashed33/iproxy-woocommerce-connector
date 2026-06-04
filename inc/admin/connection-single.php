@@ -187,7 +187,6 @@ if ( ! is_array($api_ids) ) {
                 <th>Login</th>
                 <th>Password</th>
                 <th>Expiry</th>
-                <th>Status</th>
                 <th>Copy</th>
                 <th>Action</th>
             </tr>
@@ -201,10 +200,7 @@ if ( ! is_array($api_ids) ) {
             $port = $proxy['port'] ?? '';
             $user = $proxy['auth']['login'] ?? '';
             $pass = $proxy['auth']['password'] ?? '';
-
             $order_id = $proxy['order_id'] ?? '';
-            $exists   = ! empty($proxy['iproxy_exists']);
-
             $copy = "{$host}:{$port}:{$user}:{$pass}";
         ?>
 
@@ -238,15 +234,6 @@ if ( ! is_array($api_ids) ) {
                     echo '<span style="color:#777;">No Expiry</span>';
                 }
                 ?>
-            </td>
-
-            <!-- ================= IPROXY STATUS ================= -->
-            <td>
-                <?php if ( $exists ) : ?>
-                    <span style="color:#329700;font-weight:700;">Active</span>
-                <?php else : ?>
-                    <span style="color:#e64404;font-weight:700;">Not exists in iProxy</span>
-                <?php endif; ?>
             </td>
 
             <!-- COPY -->
