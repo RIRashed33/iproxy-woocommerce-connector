@@ -33,13 +33,11 @@ final class IPROXY_WC_Connector {
         //woocommerce_thankyou
         //woocommerce_payment_complete
         add_action('woocommerce_thankyou', function($order_id) {
-
             try {
                 $this->create_proxies_after_payment($order_id);
             } catch (Exception $e) {
                 self::log('iProxy Fatal: ' . $e->getMessage());
             }
-
         }, 10, 1);
     }
 
@@ -295,7 +293,15 @@ final class IPROXY_WC_Connector {
                 continue;
             }
 
-            update_post_meta($post_id, 'connection_type', strtoupper(trim($connection['basic_info']['description'] ?? 'UNDEFINED')));
+            $connection_type = strtoupper(trim($connection['basic_info']['description'] ?? 'UNDEFINED'));
+            if ( strpos( $connection_type, 'PRIVATE' ) !== false ) {
+                update_post_meta($post_id, 'connection_type', $connection_type);
+            } elseif ( strpos( $connection_type, 'SHARED' ) !== false ) {
+                update_post_meta($post_id, 'connection_type', $connection_type);
+            } else {
+                update_post_meta($post_id, 'connection_type', 'UNDEFINED');
+            }
+
             update_post_meta($post_id, 'connection_id', $connection_id);
             update_post_meta($post_id, 'status', $status_label);
             update_post_meta($post_id, 'external_ip', $connection['app_data']['device_info']['ip_public']['ipv4'] ?? '00.00.000.00');
@@ -419,25 +425,24 @@ final class IPROXY_WC_Connector {
 
         $count_proxies = count($api_proxies);
         $connction_type = strtoupper(trim(get_post_meta($post_id, 'connection_type', true) ?? 'UNDEFINED'));
-        if($connction_type !== 'UNDEFINED'){
-            if ( strpos( $connction_type, 'PRIVATE' ) !== false ) {
-                if($count_proxies < 2){
-                    update_post_meta($post_id, 'is_available', 1);
-                }else {
-                    update_post_meta($post_id, 'is_available', 0);
-                }
-            } elseif ( strpos( $connction_type, 'SHARED' ) !== false ) {
-                if($count_proxies < 4){
-                    update_post_meta($post_id, 'is_available', 1);
-                }else {
-                    update_post_meta($post_id, 'is_available', 0);
-                }
+        if ( strpos( $connction_type, 'PRIVATE' ) !== false ) {
+            if($count_proxies < 1){
+                update_post_meta($post_id, 'is_available', 1);
+            }else {
+                update_post_meta($post_id, 'is_available', 0);
             }
+        } elseif ( strpos( $connction_type, 'SHARED' ) !== false ) {
+            if($count_proxies < 4){
+                update_post_meta($post_id, 'is_available', 1);
+            }else {
+                update_post_meta($post_id, 'is_available', 0);
+            }
+        } else {
+            update_post_meta($post_id, 'is_available', 0);
         }
 
         update_post_meta($post_id, 'proxy_accesses', $api_proxies);
         update_post_meta($post_id, 'active_proxy_count', $count_proxies);
-        update_post_meta($post_id, 'connection_proxy_last_sync', current_time('mysql'));
     }
 
 
@@ -454,14 +459,31 @@ final class IPROXY_WC_Connector {
         }
 
         $selected = get_post_meta($post->ID, '_iproxy_connection_selected_type', true);
-        $connection_history = get_option('iproxy_connection_history', []);
+
+        global $wpdb;
+        $connection_types = $wpdb->get_col(
+            $wpdb->prepare(
+                "
+                SELECT DISTINCT pm.meta_value
+                FROM {$wpdb->postmeta} pm
+                INNER JOIN {$wpdb->posts} p ON p.ID = pm.post_id
+                WHERE pm.meta_key = %s
+                AND p.post_type = %s
+                AND p.post_status = 'publish'
+                AND pm.meta_value != ''
+                ORDER BY pm.meta_value ASC
+                ",
+                'connection_type',
+                'iproxy_connection'
+            )
+        );
 
         ?>
         <div class="postbox" style="margin-top:10px;padding:15px;">
             <h2 style="margin-bottom:12px;font-size:20px;padding:0;">Assign iProxy Connection Type to This Product</h2>
             <select name="iproxy_connection_type" style="width:100%;max-width:400px;">
                 <option disabled selected>Select Connection Type</option>
-                <?php if(!empty($connection_history)) : foreach ($connection_history as $conn_type => $conn_ids): ?>
+                <?php if(!empty($connection_types)) : foreach ($connection_types as $conn_type): ?>
                     <option value="<?php echo esc_attr($conn_type); ?>" <?php selected($selected, $conn_type); ?>>
                         <?php echo esc_html($conn_type); ?>
                     </option>
@@ -555,19 +577,7 @@ final class IPROXY_WC_Connector {
             // Add proxy
             $proxy_id = $proxy['id'];
             $proxy['order_id'] = "#" . $order_id;
-            $proxy['iproxy_exists'] = 1;
             $proxies[$proxy_id] = $proxy;
-
-            // Load API IDs
-            $api_ids = get_post_meta($post_id, 'proxy_ids', true);
-
-            if ( ! is_array($api_ids) ) {
-                $api_ids = [];
-            }
-
-            if ( ! in_array($proxy_id, $api_ids, true) ) {
-                $api_ids[] = $proxy_id;
-            }
 
             // Save
             update_post_meta($post_id, 'proxy_accesses', $proxies);
@@ -575,13 +585,7 @@ final class IPROXY_WC_Connector {
         }
     }
 
-
-
-
-
-
-
-
+    // Create Proxies after payment
     public function create_proxies_after_payment($order_id) {
         $api_key = get_option('iproxy_api_key', '');
         if ( empty($api_key) ) {
@@ -596,29 +600,23 @@ final class IPROXY_WC_Connector {
         }
 
         $user_proxies = [];
-        // $user_id = $order->get_user_id();
-        // if ($user_id) {
-        //     $user_proxies = get_user_meta($user_id, '_user_iproxy_proxies', true);
-        // }else {
-        //     self::log("iProxy: guest user, skipping proxy logic for order {$order_id}");
-        // }
         $email = strtolower( trim( $order->get_billing_email() ) );
         $email_key = '_user_iproxy_proxies' . md5( $email );
         if (!empty( $email )) {
             $user_proxies = get_option( $email_key, [] );
-            if ( ! is_array( $user_proxies ) ) {
+            if ( !is_array($user_proxies) ){
                 $user_proxies = [];
             }
         } else {
             self::log("iProxy: missing email for order {$order_id}");
         }
 
-        // Prepare proxy accesses [con_id => total_days]
+        // Prepare proxy accesses [connection_type => total_days]
         $proxy_accesses_point = [];
         foreach ( $order->get_items() as $item ) {
             if ( ! is_a($item, 'WC_Order_Item_Product') ) continue;
             $product_id = $item->get_product_id();
-            if ( ! $product_id ) continue;
+            if ( !$product_id ) continue;
 
             $connection_type = get_post_meta($product_id, '_iproxy_connection_selected_type', true);
             if ( empty($connection_type) ) {
@@ -643,27 +641,23 @@ final class IPROXY_WC_Connector {
             }
         }
 
+        // Prepare Proxies for each connection type
         $prepared_proxies = [];
-        foreach($proxy_accesses_point as $conn_type => $days){
-            if ( isset($user_proxies[$conn_type]) && !empty($user_proxies[$conn_type]['id']) ) {
-                $existing_proxy = $user_proxies[$conn_type];
-                $proxy_id       = $existing_proxy['id'];
-                $expires_at_raw = $existing_proxy['expires_at'] ?? '';
-                $now = time();
-                $expires_ts = $expires_at_raw ? strtotime($expires_at_raw) : 0;
-                if ( $expires_ts && $expires_ts > $now ) {
-                    $base_time = $expires_ts;
-                } else {
-                    $base_time = $now;
-                }
-                $expires_at = gmdate('Y-m-d\TH:i:s\Z', strtotime("+{$days} days", $base_time));
+        global $wpdb;
+        foreach($proxy_accesses_point as $connection_type => $days){
+            $now = time();
+            if(!empty($user_proxies[$connection_type]['connection_id']) && !empty($user_proxies[$connection_type]['proxy']) && strtotime($user_proxies[$connection_type]['proxy']['expires_at']) > $now){
+                $proxy = $user_proxies[$connection_type]['proxy'] ?? [];
+                $connection_id = $user_proxies[$connection_type]['connection_id'] ?? '';
+                $proxy_id = $proxy['id'];
+                $expires_at = gmdate('Y-m-d\TH:i:s\Z', strtotime("+{$days} days", strtotime($proxy['expires_at']));
                 $body = [
                     'expires_at'     => $expires_at,
                     'description'    => "Order ID: #{$order_id}"
                 ];
 
                 $response = wp_remote_post(
-                    "https://iproxy.online/api/console/v1/connection/{$conn_id}/proxy-access/{$proxy_id}/update",
+                    "https://iproxy.online/api/console/v1/connection/{$connection_id}/proxy-access/{$proxy_id}/update",
                     [
                         'headers' => [
                             'Authorization' => 'Bearer ' . $api_key,
@@ -675,62 +669,67 @@ final class IPROXY_WC_Connector {
                 );
 
                 if(is_wp_error($response) ) {
-                    self::log("iProxy API error: " . $response->get_error_message());
+                    self::log("Failed to update iProxy API Order {$order_id}. Connection: {$connection_id}. Proxy: {$proxy_id}" . $response->get_error_message());
                     continue;
                 }
 
                 $code = wp_remote_retrieve_response_code($response);
                 $data = json_decode(wp_remote_retrieve_body($response), true);
-                if ( $code === 201 || !empty($data['id']) ) {
-                    $prepared_proxies[$conn_type] = $data;
-                    $user_proxies[$conn_type] = $data;
-                } elseif ($code === 404) {
-                    $expires_at = gmdate('Y-m-d\TH:i:s\Z', strtotime("+{$days} days"));
-                    $body = [
-                        'listen_service' => 'socks5',
-                        'auth_type'      => 'userpass',
-                        'description'    => "Order ID: #{$order_id}",
-                        'expires_at'     => $expires_at,
+                if ( $code === 200 || !empty($data['id']) ) {
+                    $prepared_proxies[$connection_id] = $data;
+                    $user_proxies[$connection_type] = [
+                        'connection_id' => $connection_id,
+                        'proxy' => $data
                     ];
-
-                    $response = wp_remote_post(
-                        "https://iproxy.online/api/console/v1/connection/{$conn_id}/proxy-access",
-                        [
-                            'headers' => [
-                                'Authorization' => 'Bearer ' . $api_key,
-                                'Content-Type'  => 'application/json',
-                            ],
-                            'body'    => wp_json_encode($body),
-                            'timeout' => 20,
-                        ]
-                    );
-
-                    if ( is_wp_error($response) ) {
-                        self::log("iProxy API error: " . $response->get_error_message());
-                        continue;
-                    }
-
-                    $code = wp_remote_retrieve_response_code($response);
-                    $data = json_decode(wp_remote_retrieve_body($response), true);
-                    if ( $code !== 201 || empty($data['id']) ) {
-                        self::log("iProxy: Failed to create new proxy for existing proxy");
-                        continue;
-                    }
-
-                    $prepared_proxies[$conn_type] = $data;
-                    $user_proxies[$conn_type] = $data;
+                } else {
+                    self::log("Failed to update existing proxy for order {$order_id}. Connection: {$connection_id}. Proxy: {$proxy_id}. Status Code: {$code}");
+                    continue;
                 }
             } else {
-                $expires_at = gmdate('Y-m-d\TH:i:s\Z', strtotime("+{$days} days"));
+                $connection_id = $wpdb->get_var(
+                    $wpdb->prepare(
+                        "
+                        SELECT pm_conn.meta_value
+                        FROM {$wpdb->posts} p
+
+                        INNER JOIN {$wpdb->postmeta} pm_type
+                            ON p.ID = pm_type.post_id
+                            AND pm_type.meta_key = 'connection_type'
+
+                        INNER JOIN {$wpdb->postmeta} pm_available
+                            ON p.ID = pm_available.post_id
+                            AND pm_available.meta_key = 'is_available'
+
+                        INNER JOIN {$wpdb->postmeta} pm_conn
+                            ON p.ID = pm_conn.post_id
+                            AND pm_conn.meta_key = 'connection_id'
+
+                        WHERE p.post_type = 'iproxy_connection'
+                        AND p.post_status = 'publish'
+                        AND pm_type.meta_value = %s
+                        AND pm_available.meta_value = '1'
+
+                        LIMIT 1
+                        ",
+                        $connection_type
+                    )
+                );
+
+                if( empty($connection_id) ) {
+                    self::log("iProxy: No available connection found for type {$connection_type} for order {$order_id}");
+                    continue;
+                }
+
+                $expires_at = gmdate('Y-m-d\TH:i:s\Z', strtotime("+{$days} days", $now));
                 $body = [
-                    'listen_service' => 'socks5',
-                    'auth_type'      => 'userpass',
-                    'description'    => "Order ID: #{$order_id}",
+                    'listen_service' => "socks5",
+                    'auth_type'      => "userpass",
                     'expires_at'     => $expires_at,
+                    'description'    => "Order ID: #{$order_id}"
                 ];
 
                 $response = wp_remote_post(
-                    "https://iproxy.online/api/console/v1/connection/{$conn_id}/proxy-access",
+                    "https://iproxy.online/api/console/v1/connection/{$connection_id}/proxy-access",
                     [
                         'headers' => [
                             'Authorization' => 'Bearer ' . $api_key,
@@ -742,33 +741,43 @@ final class IPROXY_WC_Connector {
                 );
 
                 if ( is_wp_error($response) ) {
-                    self::log("iProxy API error: " . $response->get_error_message());
+                    self::log("Failed to create proxy for order {$order_id}: " . $response->get_error_message());
                     continue;
                 }
 
                 $code = wp_remote_retrieve_response_code($response);
                 $data = json_decode(wp_remote_retrieve_body($response), true);
-                if ( $code !== 201 || empty($data['id']) ) {
-                    self::log("iProxy: Failed to create new proxy");
+                if($code === 201 && !empty($data['id'])){
+                    $prepared_proxies[$connection_id] = $data;
+                    $user_proxies[$connection_type] = [
+                        'connection_id' => $connection_id,
+                        'proxy' => $data
+                    ];
+                } else {
+                    self::log("iProxy: Failed to create new proxy for order {$order_id}. Connection: {$connection_id}. Status Code: {$code}");
                     continue;
                 }
-
-                $prepared_proxies[$conn_type] = $data;
-                $user_proxies[$conn_type] = $data;
             }
         }
+
+        $user_valid_proxies = array_filter($user_proxies, function($item) {
+            $expires_at = $item['proxy']['expires_at'] ?? null;
+            return $expires_at && strtotime($expires_at) > time();
+        });
+
+        self::log("iProxy: Prepared proxies for order {$order_id}: " . print_r($user_valid_proxies, true));
 
         // Store proxies in Connection
         $this->store_proxies( $prepared_proxies, $order_id );
         // Store proxies in Option By email and send Email
         if ( ! empty( $email ) ) {
-            update_option( $email_key, $user_proxies );
+            update_option( $email_key, $user_valid_proxies, false );
             //SEND EMAIL AFTER SAVE
             $subject = "Your Proxy Details - Order #{$order_id}";
             $message = "Hello,\n\nYour proxy has been activated:\n\n";
 
             if(is_array($prepared_proxies)){
-                foreach ( $prepared_proxies as $conn_id => $proxy ) {
+                foreach ( $prepared_proxies as $proxy ) {
                     $host = $proxy['hostname'] ?? '';
                     $port = $proxy['port'] ?? '';
                     $user = $proxy['auth']['login'] ?? '';

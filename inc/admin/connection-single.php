@@ -1,181 +1,14 @@
 <?php
 if ( ! defined( 'ABSPATH' ) ) exit;
-
 $post_id = $post->ID;
-$api_key = get_option('iproxy_api_key', '');
-$connection_id = get_post_meta($post_id, 'connection_id', true);
-
-/* =========================
- * SYNC HANDLER
- * ========================= */
-if ( isset($_POST['connection_proxy_sync']) ) {
-
-    if (
-        ! isset($_POST['connection_proxy_nonce']) ||
-        ! wp_verify_nonce($_POST['connection_proxy_nonce'], 'iproxy_connection_proxy_sync')
-    ) {
-        wp_die('Security check failed');
-    }
-
-    if ( empty($api_key) || empty($connection_id) ) {
-        wp_die('Missing API key or connection ID');
-    }
-
-    $response = wp_remote_get(
-        'https://iproxy.online/api/console/v1/connection/' . $connection_id . '/proxy-access',
-        [
-            'headers' => [
-                'Authorization' => 'Bearer ' . $api_key
-            ],
-            'timeout' => 20,
-        ]
-    );
-
-    if ( is_wp_error($response) ) {
-        wp_die('API request failed');
-    }
-
-    $data = json_decode(wp_remote_retrieve_body($response), true);
-    $proxy_accesses = $data['proxy_accesses'] ?? [];
-
-    if ( ! is_array($proxy_accesses) ) {
-        $proxy_accesses = [];
-    }
-
-    /* =========================
-     * INDEX API PROXIES
-     * ========================= */
-    $api_index = [];
-    $api_ids   = [];
-
-    foreach ( $proxy_accesses as $proxy ) {
-
-        $id = $proxy['id'] ?? '';
-        if ( empty($id) ) continue;
-
-        $api_index[$id] = $proxy;
-        $api_ids[] = $id;
-    }
-
-    /* =========================
-     * EXISTING DATA
-     * ========================= */
-    $saved_index = get_post_meta($post_id, 'proxy_accesses', true );
-    if ( ! is_array($saved_index) ) {
-        $saved_index = [];
-    }
-
-    $final_index = $saved_index;
-
-    /* =========================
-     * MARK ALL OLD AS NOT EXISTS
-     * ========================= */
-    foreach ( $final_index as $sid => $sp ) {
-        $final_index[$sid]['iproxy_exists'] = 0;
-    }
-
-    /* =========================
-     * MERGE API DATA (KEEP ORDER ID)
-     * ========================= */
-    foreach ( $api_index as $id => $proxy ) {
-
-        $proxy['iproxy_exists'] = 1;
-
-        // preserve order id
-        $proxy['order_id'] = $saved_index[$id]['order_id'] ?? '';
-
-        $final_index[$id] = $proxy;
-    }
-
-    update_post_meta($post_id, 'proxy_accesses', $final_index);
-    update_post_meta($post_id, 'proxy_ids', $api_ids);
-    update_post_meta($post_id, 'connection_proxy_last_sync', current_time('mysql'));
-
-    echo '<div class="notice notice-success"><p>Proxies synced successfully</p></div>';
-}
-
-/* =========================
- * DELETE HANDLER
- * ========================= */
-if ( isset($_POST['delete_proxy']) ) {
-
-    if (
-        ! isset($_POST['iproxy_delete_nonce']) ||
-        ! wp_verify_nonce($_POST['iproxy_delete_nonce'], 'iproxy_delete_proxy')
-    ) {
-        wp_die('Security check failed');
-    }
-
-    $proxy_id = sanitize_text_field($_POST['proxy_id'] ?? '');
-
-    if ( empty($proxy_id) || empty($connection_id) ) {
-        wp_die('Missing data');
-    }
-
-    $response = wp_remote_request(
-        "https://iproxy.online/api/console/v1/connection/{$connection_id}/proxy-access/{$proxy_id}",
-        [
-            'method'  => 'DELETE',
-            'headers' => [
-                'Authorization' => 'Bearer ' . $api_key
-            ],
-            'timeout' => 20,
-        ]
-    );
-
-    if ( ! is_wp_error($response) ) {
-
-        $proxies = get_post_meta($post_id, 'proxy_accesses', true);
-
-        if ( is_array($proxies) ) {
-            unset($proxies[$proxy_id]);
-            update_post_meta($post_id, 'proxy_accesses', $proxies);
-        }
-
-        echo '<div class="notice notice-success"><p>Proxy deleted successfully</p></div>';
-    }
-}
-
-/* =========================
- * LOAD PROXIES
- * ========================= */
 $proxies = get_post_meta($post_id, 'proxy_accesses', true );
-if ( ! is_array($proxies) ) {
+if(!is_array($proxies)){
     $proxies = [];
 }
-
-$api_ids = get_post_meta($post_id, 'proxy_ids', true );
-if ( ! is_array($api_ids) ) {
-    $api_ids = [];
-}
-
-// echo '<pre>';
-// print_r($proxies);
-// echo '</pre>';
-
 ?>
 
 <div class="wrap">
-    <h1>Proxy Accesses</h1>
-
-    <div style="margin-bottom:24px;">
-        <div style="display:flex;align-items:center;gap:24px;">
-            
-            <h2 style="margin:0;"><?php echo esc_html( get_the_title($post_id) ); ?></h2>
-
-            <form method="post">
-                <?php wp_nonce_field( 'iproxy_connection_proxy_sync', 'connection_proxy_nonce' ); ?>
-                <input type="submit" name="connection_proxy_sync" class="button button-primary" value="Update Proxies">
-            </form>
-
-            <?php
-            $last_sync = get_post_meta($post_id, 'connection_proxy_last_sync', true );
-            if ( $last_sync ) {
-                echo '<span>Last sync: ' . esc_html($last_sync) . '</span>';
-            }
-            ?>
-        </div>
-    </div>
+    <h1 style="margin-bottom: 24px;">Proxy Accesses - <?php echo esc_html( get_the_title($post_id) ); ?></h1>
 
     <table class="widefat striped">
         <thead>
@@ -188,7 +21,6 @@ if ( ! is_array($api_ids) ) {
                 <th>Password</th>
                 <th>Expiry</th>
                 <th>Copy</th>
-                <th>Action</th>
             </tr>
         </thead>
 
@@ -239,16 +71,6 @@ if ( ! is_array($api_ids) ) {
             <!-- COPY -->
             <td>
                 <button class="copy-btn" data-copy="<?php echo esc_attr($copy); ?>">📋</button>
-            </td>
-
-            <!-- DELETE -->
-            <td>
-                <form method="post" onsubmit="return confirm('Delete this proxy?');">
-                    <input type="hidden" name="delete_proxy" value="1">
-                    <input type="hidden" name="proxy_id" value="<?php echo esc_attr($id); ?>">
-                    <?php wp_nonce_field('iproxy_delete_proxy', 'iproxy_delete_nonce'); ?>
-                    <button class="button button-link-delete">Delete</button>
-                </form>
             </td>
         </tr>
 
