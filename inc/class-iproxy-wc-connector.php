@@ -246,6 +246,13 @@ final class IPROXY_WC_Connector {
         $data   = json_decode(wp_remote_retrieve_body($response), true);
 
         if ( $status !== 200 || empty($data['connections']) ) {
+            self::log(
+                sprintf(
+                    'iProxy: Failed syncing connections. Status: %s Response: %s',
+                    $status,
+                    wp_json_encode($data)
+                )
+            );
             return;
         }
 
@@ -345,8 +352,6 @@ final class IPROXY_WC_Connector {
 
         update_option( 'iproxy_last_sync', current_time('mysql'));
         update_option( 'iproxy_last_sync_timestamp', time(), false);
-
-        self::log("iProxy: Completed syncing connections. Total: " . count($connections) );
     }
 
     //Sync Connection Proxies
@@ -452,8 +457,6 @@ final class IPROXY_WC_Connector {
 
         update_post_meta($post_id, 'proxy_accesses', $api_proxies);
         update_post_meta($post_id, 'active_proxy_count', $count_proxies);
-
-        self::log("iProxy: Completed syncing proxies for connection {$connection_id}. Total: {$count_proxies}");
     }
 
     // Queue Connection Sync on Order Status Change
@@ -701,7 +704,6 @@ final class IPROXY_WC_Connector {
         $code = wp_remote_retrieve_response_code($response);
         $data = json_decode(wp_remote_retrieve_body($response), true);
         if($code === 201 && !empty($data['id'])){
-            self::log("iProxy: Successfully created proxy for order {$order_id}");
             return [ $connection_id => $data ];
         } else {
             self::log(
@@ -751,8 +753,6 @@ final class IPROXY_WC_Connector {
             update_post_meta($post_id, 'proxy_accesses', $proxies);
             update_post_meta($post_id, 'proxy_ids', $api_ids);
         }
-
-        self::log("iProxy: Stored proxies for order {$order_id} in connections. <br/>" . wp_json_encode($prepared_proxies));
     }
 
     // Create Proxies after payment
@@ -888,8 +888,6 @@ final class IPROXY_WC_Connector {
 
             return empty($expires_at) || strtotime($expires_at) > time();
         });
-
-        self::log("iProxy: Prepared proxies for order {$order_id}: " . print_r($user_valid_proxies, true));
 
         // Store proxies in Connection
         $this->store_proxies( $prepared_proxies, $order_id );
