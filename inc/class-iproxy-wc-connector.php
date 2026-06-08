@@ -35,6 +35,7 @@ final class IPROXY_WC_Connector {
         add_action( 'iproxy_daily_sync_connections', [ $this, 'sync_all_connections' ] );
         add_action( 'init', [ $this, 'schedule_daily_connection_sync' ] );
         add_action( 'init', [ $this, 'catchup_daily_connection_sync' ] );
+        add_action( 'iproxy_sync_product_inventory', [ $this, 'sync_product_inventory' ] );
 
         //woocommerce_thankyou
         //woocommerce_payment_complete
@@ -224,6 +225,7 @@ final class IPROXY_WC_Connector {
     public function sync_all_connections() {
         $api_key = get_option('iproxy_api_key', '');
         if ( empty($api_key) ) {
+            self::log("iProxy: Missing API key. All Connection sync cannot proceed.");
             return;
         }
 
@@ -238,6 +240,7 @@ final class IPROXY_WC_Connector {
         );
 
         if ( is_wp_error($response) ) {
+            self::log("iProxy: Failed all syncing connections. " . $response->get_error_message());
             return;
         }
 
@@ -247,7 +250,7 @@ final class IPROXY_WC_Connector {
         if ( $status !== 200 || empty($data['connections']) ) {
             self::log(
                 sprintf(
-                    'iProxy: Failed syncing connections. Status: %s Response: %s',
+                    'iProxy: Failed all syncing connections. Status: %s Response: %s',
                     $status,
                     wp_json_encode($data)
                 )
@@ -390,7 +393,7 @@ final class IPROXY_WC_Connector {
         );
 
         if ( is_wp_error( $response ) ) {
-            self::log( $response->get_error_message() );
+            self::log("iProxy: Failed syncing connections proxies. " . $response->get_error_message() );
             return;
         }
 
@@ -438,7 +441,7 @@ final class IPROXY_WC_Connector {
 
                 $status = wp_remote_retrieve_response_code($response);
                 if ( is_wp_error($response) || $status !== 200 ){
-                    self::log("Failed deleting proxy {$proxy_id} and connection {$connection_id} during sync. Status: {$status}");
+                    self::log("iProxy: Failed deleting proxy {$proxy_id} and connection {$connection_id} during sync. Status: {$status}");
                 }
             }
         }
@@ -461,15 +464,28 @@ final class IPROXY_WC_Connector {
             update_post_meta($post_id, 'is_available', 0);
         }
 
-        $remaining = (int) get_option( 'iproxy_pending_connection_syncs', 0 );
-        $remaining--;
-        if ( $remaining <= 0 ) {
-            $this->sync_product_inventory();
-        }
-
-        update_option( 'iproxy_pending_connection_syncs', max(0, $remaining), false );
         update_post_meta($post_id, 'proxy_accesses', $api_proxies);
         update_post_meta($post_id, 'active_proxy_count', $count_proxies);
+        
+        $remaining = (int) get_option( 'iproxy_pending_connection_syncs', 0 );
+        $remaining--;
+        update_option( 'iproxy_pending_connection_syncs', max(0, $remaining), false );
+        if ( $remaining <= 0 ) {
+            if (
+                function_exists( 'as_has_scheduled_action' ) &&
+                ! as_has_scheduled_action(
+                    'iproxy_sync_product_inventory',
+                    [],
+                    'iproxy'
+                )
+            ) {
+                as_enqueue_async_action(
+                    'iproxy_sync_product_inventory',
+                    [],
+                    'iproxy'
+                );
+            }
+        }
     }
 
     // Queue Connection Sync on Order Status Change
@@ -556,54 +572,68 @@ final class IPROXY_WC_Connector {
             'posts_per_page' => -1,
             'fields'         => 'ids',
         ]);
-
         foreach ( $products as $product_id ) {
             $connection_type = get_post_meta(
                 $product_id,
                 '_iproxy_connection_selected_type',
                 true
             );
-
-            if ( empty( $connection_type ) ) {
-                continue;
+            $connections = [];
+            if ( !empty( $connection_type ) ) {
+                $connections = get_posts([
+                    'post_type'      => 'iproxy_connection',
+                    'post_status'    => 'publish',
+                    'posts_per_page' => 1,
+                    'fields'         => 'ids',
+                    'meta_query'     => [
+                        'relation' => 'AND',
+                        [
+                            'key'   => 'connection_type',
+                            'value' => $connection_type,
+                        ],
+                        [
+                            'key'   => 'is_active',
+                            'value' => '1',
+                        ],
+                        [
+                            'key'   => 'is_available',
+                            'value' => '1',
+                        ],
+                    ],
+                ]);
             }
 
-            $connections = get_posts([
-                'post_type'      => 'iproxy_connection',
-                'post_status'    => 'publish',
-                'posts_per_page' => 1,
-                'fields'         => 'ids',
-                'meta_query'     => [
-                    'relation' => 'AND',
-                    [
-                        'key'   => 'connection_type',
-                        'value' => $connection_type,
-                    ],
-                    [
-                        'key'   => 'is_active',
-                        'value' => '1',
-                    ],
-                    [
-                        'key'   => 'is_available',
-                        'value' => '1',
-                    ],
-                ],
-            ]);
-
+            $stock_status = ! empty( $connections ) ? 'instock' : 'outofstock';
             $product = wc_get_product( $product_id );
-
             if ( ! $product ) {
+                self::log("iProxy: Failed loading product {$product_id}");
                 continue;
             }
 
-            if ( ! empty( $connections ) ) {
-                $product->set_stock_status( 'instock' );
-            } else {
-                $product->set_stock_status( 'outofstock' );
+            // Parent product
+            if ( $product->get_stock_status() !== $stock_status ) {
+                $product->set_manage_stock( false );
+                $product->set_stock_status( $stock_status );
+                $product->save();
             }
 
-            $product->save();
+            // Variable product variations
+            if ( $product->is_type( 'variable' ) ) {
+                foreach ( $product->get_children() as $variation_id ) {
+                    $variation = wc_get_product( $variation_id );
+                    if ( ! $variation ) {
+                        self::log("iProxy: Failed loading variation {$variation_id}");
+                        continue;
+                    }
+                    if ( $variation->get_stock_status() !== $stock_status ) {
+                        $variation->set_manage_stock( false );
+                        $variation->set_stock_status( $stock_status );
+                        $variation->save();
+                    }
+                }
+            }
         }
+        wc_delete_product_transients();
     }
 
     // Products Connection Field Selector

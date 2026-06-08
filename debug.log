@@ -1,71 +1,8 @@
-[2026-06-05 14:38:36] - iProxy: Completed syncing connections. Total: 6
-[2026-06-05 14:38:55] - iProxy: Completed syncing proxies for connection swqu2uc3ev. Total: 1
-[2026-06-05 14:38:56] - iProxy: Completed syncing proxies for connection urecmxsjxj. Total: 3
-[2026-06-05 14:38:57] - iProxy: Completed syncing proxies for connection lw7nx4cwsb. Total: 1
-[2026-06-05 14:38:57] - iProxy: Completed syncing proxies for connection wvzn6xyy3f. Total: 1
-[2026-06-05 14:38:58] - iProxy: Completed syncing proxies for connection gwuar7wk7z. Total: 1
-[2026-06-05 14:38:58] - iProxy: Completed syncing proxies for connection 5utrfxma6r. Total: 0
-[2026-06-05 14:41:44] - iProxy: Successfully created proxy for order 2290
-[2026-06-05 14:41:44] - iProxy: Prepared proxies for order 2290: Array
-(
-    [5utrfxma6r] => Array
-        (
-            [auth] => Array
-                (
-                    [login] => havinproxy065344
-                    [password] => HtIDTvRRfyT5
-                )
-
-            [auth_type] => userpass
-            [connection_id] => 5utrfxma6r
-            [description] => Order ID: #2281
-            [expires_at] => 2026-07-08T05:53:43Z
-            [hostname] => 6xnzxi2glj.cn.fxdx.in
-            [id] => cowvsdmxl5
-            [ip] => 192.248.191.112
-            [listen_service] => socks5
-            [password_updated_at] => 2026-05-06T05:53:44.067Z
-            [port] => 16343
-        )
-
-    [O2-5G-SHARED] => Array
-        (
-            [connection_id] => 5utrfxma6r
-            [proxy] => Array
-                (
-                    [auth] => Array
-                        (
-                            [login] => havinproxy054143
-                            [password] => v54OXzUoQvQK
-                        )
-
-                    [auth_type] => userpass
-                    [connection_id] => 5utrfxma6r
-                    [description] => Order ID: #2290
-                    [expires_at] => 2026-07-08T08:41:43Z
-                    [hostname] => 6xnzxi2glj.cn.fxdx.in
-                    [id] => lsf3zukg6j
-                    [ip] => 192.248.191.112
-                    [listen_service] => socks5
-                    [password_updated_at] => 2026-06-05T08:41:43.696Z
-                    [port] => 16012
-                )
-
-        )
-
-)
-[2026-06-05 14:41:44] - iProxy: Stored proxies for order 2290 in connections. <br/>{"5utrfxma6r":{"auth":{"login":"havinproxy054143","password":"v54OXzUoQvQK"},"auth_type":"userpass","connection_id":"5utrfxma6r","description":"Order ID: #2290","expires_at":"2026-07-08T08:41:43Z","hostname":"6xnzxi2glj.cn.fxdx.in","id":"lsf3zukg6j","ip":"192.248.191.112","listen_service":"socks5","password_updated_at":"2026-06-05T08:41:43.696Z","port":16012}}
-[2026-06-05 14:41:51] - iProxy: Completed syncing connections. Total: 6
-[2026-06-05 14:41:52] - iProxy: Completed syncing proxies for connection swqu2uc3ev. Total: 1
-[2026-06-05 14:41:52] - iProxy: Completed syncing proxies for connection urecmxsjxj. Total: 2
-[2026-06-05 14:41:52] - iProxy: Completed syncing proxies for connection lw7nx4cwsb. Total: 1
-[2026-06-05 14:41:53] - iProxy: Completed syncing proxies for connection wvzn6xyy3f. Total: 1
-[2026-06-05 14:41:53] - iProxy: Completed syncing proxies for connection gwuar7wk7z. Total: 1
-[2026-06-05 14:41:54] - iProxy: Completed syncing proxies for connection 5utrfxma6r. Total: 1
-[2026-06-05 15:31:58] - iProxy: Completed syncing connections. Total: 6
-[2026-06-05 15:31:59] - iProxy: Completed syncing proxies for connection swqu2uc3ev. Total: 1
-[2026-06-05 15:32:00] - iProxy: Completed syncing proxies for connection urecmxsjxj. Total: 2
-[2026-06-05 15:32:00] - iProxy: Completed syncing proxies for connection lw7nx4cwsb. Total: 1
-[2026-06-05 15:32:01] - iProxy: Completed syncing proxies for connection wvzn6xyy3f. Total: 1
-[2026-06-05 15:32:01] - iProxy: Completed syncing proxies for connection gwuar7wk7z. Total: 1
-[2026-06-05 15:32:02] - iProxy: Completed syncing proxies for connection 5utrfxma6r. Total: 1
+[2026-06-08 12:21:54] - iProxy: Remaining pending connection syncs: 5
+[2026-06-08 12:21:54] - iProxy: Remaining pending connection syncs: 4
+[2026-06-08 12:21:56] - iProxy: Remaining pending connection syncs: 3
+[2026-06-08 12:21:56] - iProxy: Remaining pending connection syncs: 2
+[2026-06-08 12:21:57] - iProxy: Remaining pending connection syncs: 1
+[2026-06-08 12:21:57] - iProxy: All connection syncs completed. Scheduling inventory sync.
+[2026-06-08 12:21:57] - iProxy: Starting product inventory sync...
+[2026-06-08 12:21:57] - iProxy: Product inventory sync completed.
