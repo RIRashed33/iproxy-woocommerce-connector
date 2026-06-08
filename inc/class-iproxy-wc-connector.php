@@ -350,6 +350,7 @@ final class IPROXY_WC_Connector {
             }
         }
 
+        update_option( 'iproxy_pending_connection_syncs', count($connections), false );
         update_option( 'iproxy_last_sync', current_time('mysql'));
         update_option( 'iproxy_last_sync_timestamp', time(), false);
     }
@@ -455,6 +456,13 @@ final class IPROXY_WC_Connector {
             update_post_meta($post_id, 'is_available', 0);
         }
 
+        $remaining = (int) get_option( 'iproxy_pending_connection_syncs', 0 );
+        $remaining--;
+        if ( $remaining <= 0 ) {
+            $this->sync_product_inventory();
+        }
+
+        update_option( 'iproxy_pending_connection_syncs', max(0, $remaining), false );
         update_post_meta($post_id, 'proxy_accesses', $api_proxies);
         update_post_meta($post_id, 'active_proxy_count', $count_proxies);
     }
@@ -533,6 +541,60 @@ final class IPROXY_WC_Connector {
             [],
             'iproxy'
         );
+    }
+
+    // Sync Product Inventory based on Connection Availability
+    public function sync_product_inventory() {
+        $products = get_posts([
+            'post_type'      => 'product',
+            'post_status'    => 'publish',
+            'posts_per_page' => -1,
+            'fields'         => 'ids',
+        ]);
+
+        foreach ( $products as $product_id ) {
+            $connection_type = get_post_meta(
+                $product_id,
+                '_iproxy_connection_selected_type',
+                true
+            );
+
+            if ( empty( $connection_type ) ) {
+                continue;
+            }
+
+            $connections = get_posts([
+                'post_type'      => 'iproxy_connection',
+                'post_status'    => 'publish',
+                'posts_per_page' => 1,
+                'fields'         => 'ids',
+                'meta_query'     => [
+                    'relation' => 'AND',
+                    [
+                        'key'   => 'connection_type',
+                        'value' => $connection_type,
+                    ],
+                    [
+                        'key'   => 'is_available',
+                        'value' => '1',
+                    ],
+                ],
+            ]);
+
+            $product = wc_get_product( $product_id );
+
+            if ( ! $product ) {
+                continue;
+            }
+
+            if ( ! empty( $connections ) ) {
+                $product->set_stock_status( 'instock' );
+            } else {
+                $product->set_stock_status( 'outofstock' );
+            }
+
+            $product->save();
+        }
     }
 
     // Products Connection Field Selector
