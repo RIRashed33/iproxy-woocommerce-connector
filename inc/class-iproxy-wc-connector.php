@@ -153,7 +153,6 @@ final class IPROXY_WC_Connector {
 
         $post_id = isset($_GET['post_id']) ? (int) $_GET['post_id'] : 0;
 
-        // 🚫 BLOCK direct/invalid access
         if ( ! $post_id ) {
             wp_die( 'Invalid request' );
         }
@@ -304,6 +303,12 @@ final class IPROXY_WC_Connector {
 
             if( ! $post_id || is_wp_error($post_id)){
                 continue;
+            }
+
+            if(strtotime($expires_at) > time()){
+                update_post_meta($post_id, 'is_active', 1);
+            } else {
+                update_post_meta($post_id, 'is_active', 0);
             }
 
             $connection_type = strtoupper(trim($connection['basic_info']['description'] ?? 'UNDEFINED'));
@@ -575,6 +580,10 @@ final class IPROXY_WC_Connector {
                         'value' => $connection_type,
                     ],
                     [
+                        'key'   => 'is_active',
+                        'value' => '1',
+                    ],
+                    [
                         'key'   => 'is_available',
                         'value' => '1',
                     ],
@@ -714,19 +723,29 @@ final class IPROXY_WC_Connector {
                 "
                 SELECT pm_conn.meta_value
                 FROM {$wpdb->posts} p
+
                 INNER JOIN {$wpdb->postmeta} pm_type
                     ON p.ID = pm_type.post_id
                     AND pm_type.meta_key = 'connection_type'
+
                 INNER JOIN {$wpdb->postmeta} pm_available
                     ON p.ID = pm_available.post_id
                     AND pm_available.meta_key = 'is_available'
+
+                INNER JOIN {$wpdb->postmeta} pm_active
+                    ON p.ID = pm_active.post_id
+                    AND pm_active.meta_key = 'is_active'
+
                 INNER JOIN {$wpdb->postmeta} pm_conn
                     ON p.ID = pm_conn.post_id
                     AND pm_conn.meta_key = 'connection_id'
+
                 WHERE p.post_type = 'iproxy_connection'
                 AND p.post_status = 'publish'
                 AND pm_type.meta_value = %s
                 AND pm_available.meta_value = '1'
+                AND pm_active.meta_value = '1'
+
                 LIMIT 1
                 ",
                 $connection_type
